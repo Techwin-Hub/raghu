@@ -1,82 +1,76 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:image_cropper/image_cropper.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:camera/camera.dart';
-import 'camera_screen.dart';
+import 'package:crop_your_image/crop_your_image.dart';
+import 'take_selfie.dart';
 
 class ProfilePicturePicker extends StatefulWidget {
-  final void Function(File file) onImageSelected;
+  final void Function(File file)? onImageSelected;
+  final void Function(Uint8List imageBytes)? onWebImageSelected;
 
-  const ProfilePicturePicker({super.key, required this.onImageSelected});
+  const ProfilePicturePicker({
+    super.key,
+    this.onImageSelected,
+    this.onWebImageSelected,
+  });
 
   @override
   State<ProfilePicturePicker> createState() => _ProfilePicturePickerState();
 }
 
 class _ProfilePicturePickerState extends State<ProfilePicturePicker> {
-  File? _imageFile;
+  final CropController _cropController = CropController();
+  Uint8List? _webImageBytes;
+  File? _pickedFile;
+  bool _showCropper = false;
 
-  Future<void> _pickImage() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-    );
+  Future<void> _pickImage(ImageSource source) async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: source);
 
-    if (result != null) {
-      File file = File(result.files.single.path!);
-      widget.onImageSelected(file);
+    if (pickedFile != null) {
+      if (kIsWeb) {
+        final bytes = await pickedFile.readAsBytes();
+        setState(() {
+          _webImageBytes = bytes;
+          _showCropper = true;
+        });
+      } else {
+        final file = File(pickedFile.path);
+        setState(() {
+          _pickedFile = file;
+          _showCropper = true;
+        });
+      }
+    }
+  }
 
+  void _onCropped(Uint8List croppedData) {
+    if (kIsWeb) {
+      widget.onWebImageSelected?.call(croppedData);
       setState(() {
-        _imageFile = file;
+        _webImageBytes = croppedData;
+        _showCropper = false;
+      });
+    } else {
+      // Save cropped image to temp file (optional)
+      // For now, reuse same file reference
+      widget.onImageSelected?.call(_pickedFile!);
+      setState(() {
+        _showCropper = false;
       });
     }
   }
 
-  Future<void> _cropImage(File imageFile) async {
-    CroppedFile? croppedFile = await ImageCropper().cropImage(
-      sourcePath: imageFile.path,
-      aspectRatioPresets: [
-        CropAspectRatioPreset.square,
-        CropAspectRatioPreset.ratio3x2,
-        CropAspectRatioPreset.original,
-        CropAspectRatioPreset.ratio4x3,
-        CropAspectRatioPreset.ratio16x9
-      ],
-      uiSettings: [
-        AndroidUiSettings(
-            toolbarTitle: 'Cropper',
-            toolbarColor: Colors.deepOrange,
-            toolbarWidgetColor: Colors.white,
-            initAspectRatio: CropAspectRatioPreset.original,
-            lockAspectRatio: false),
-        IOSUiSettings(
-          title: 'Cropper',
-        ),
-        WebUiSettings(
-          context: context,
-        ),
-      ],
-    );
-    if (croppedFile != null) {
-      widget.onImageSelected(File(croppedFile.path));
-      setState(() {
-        _imageFile = File(croppedFile.path);
-      });
-    }
-  }
-
-  Future<void> _openCamera() async {
-    final cameras = await availableCameras();
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => CameraScreen(cameras: cameras),
-      ),
-    );
-    if (result != null) {
-      _cropImage(result);
+  Widget _imagePreview() {
+    if (kIsWeb && _webImageBytes != null) {
+      return Image.memory(_webImageBytes!, width: 100, height: 100, fit: BoxFit.cover);
+    } else if (_pickedFile != null) {
+      return Image.file(_pickedFile!, width: 100, height: 100, fit: BoxFit.cover);
+    } else {
+      return const Icon(Icons.account_circle, size: 100);
     }
   }
 
@@ -84,23 +78,58 @@ class _ProfilePicturePickerState extends State<ProfilePicturePicker> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        _imageFile != null
-            ? Image.file(
-                _imageFile!,
-                width: 100,
-                height: 100,
-                fit: BoxFit.cover,
-              )
-            : const Icon(Icons.account_circle, size: 100),
+        _imagePreview(),
+        const SizedBox(height: 10),
+        if (_showCropper && (kIsWeb ? _webImageBytes != null : _pickedFile != null))
+          SizedBox(
+            height: 300,
+            child: Crop(
+              controller: _cropController,
+              image: kIsWeb
+                  ? _webImageBytes!
+                  : File(_pickedFile!.path).readAsBytesSync(),
+              onCropped: _onCropped,
+              initialSize: 0.8,
+              baseColor: Colors.white,
+              maskColor: Colors.black.withOpacity(0.4),
+              cornerDotBuilder: (size, edgeAlignment) =>
+                  const DotControl(color: Colors.orange),
+            ),
+          ),
         const SizedBox(height: 10),
         ElevatedButton.icon(
-          onPressed: _pickImage,
+          onPressed: () => _pickImage(ImageSource.gallery),
           icon: const Icon(Icons.upload_file),
           label: const Text('Upload from Device'),
         ),
         const SizedBox(height: 10),
         ElevatedButton.icon(
-          onPressed: _openCamera,
+          onPressed: () {
+            if (kIsWeb) {
+              showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text("Take a Selfie"),
+                  content: SizedBox(
+                    width: 400,
+                    height: 500,
+                    child: TakeSelfieWebWidget(
+                      onCropped: (croppedBytes) {
+                        widget.onWebImageSelected?.call(croppedBytes);
+                        setState(() {
+                          _webImageBytes = croppedBytes;
+                          _showCropper = false;
+                        });
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                  ),
+                ),
+              );
+            } else {
+              _pickImage(ImageSource.camera);
+            }
+          },
           icon: const Icon(Icons.camera_alt),
           label: const Text('Take Selfie'),
         ),
