@@ -1,6 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:camera/camera.dart';
+import 'camera_screen.dart';
 
 class ProfilePicturePicker extends StatefulWidget {
   final void Function(File file) onImageSelected;
@@ -29,9 +34,49 @@ class _ProfilePicturePickerState extends State<ProfilePicturePicker> {
     }
   }
 
-  void _openCameraApp() {
-    if (Platform.isWindows) {
-      Process.run('start', ['microsoft.windows.camera:', ''], runInShell: true);
+  Future<void> _cropImage(File imageFile) async {
+    CroppedFile? croppedFile = await ImageCropper().cropImage(
+      sourcePath: imageFile.path,
+      aspectRatioPresets: [
+        CropAspectRatioPreset.square,
+        CropAspectRatioPreset.ratio3x2,
+        CropAspectRatioPreset.original,
+        CropAspectRatioPreset.ratio4x3,
+        CropAspectRatioPreset.ratio16x9
+      ],
+      uiSettings: [
+        AndroidUiSettings(
+            toolbarTitle: 'Cropper',
+            toolbarColor: Colors.deepOrange,
+            toolbarWidgetColor: Colors.white,
+            initAspectRatio: CropAspectRatioPreset.original,
+            lockAspectRatio: false),
+        IOSUiSettings(
+          title: 'Cropper',
+        ),
+        WebUiSettings(
+          context: context,
+        ),
+      ],
+    );
+    if (croppedFile != null) {
+      widget.onImageSelected(File(croppedFile.path));
+      setState(() {
+        _imageFile = File(croppedFile.path);
+      });
+    }
+  }
+
+  Future<void> _openCamera() async {
+    final cameras = await availableCameras();
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CameraScreen(cameras: cameras),
+      ),
+    );
+    if (result != null) {
+      _cropImage(result);
     }
   }
 
@@ -55,9 +100,9 @@ class _ProfilePicturePickerState extends State<ProfilePicturePicker> {
         ),
         const SizedBox(height: 10),
         ElevatedButton.icon(
-          onPressed: _openCameraApp,
+          onPressed: _openCamera,
           icon: const Icon(Icons.camera_alt),
-          label: const Text('Take Selfie (Open Camera App)'),
+          label: const Text('Take Selfie'),
         ),
       ],
     );
